@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Firebase Cloud Storage Security Rules for CareerLens AI
+// Project ID: careerLens-ai-8beae
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Resumes are private to the individual user
+    // Path structure: /resumes/{userId}/{fileName}
+    match /resumes/{userId}/{fileName} {
+      // Allow read and delete if authenticated and user matches the path UID
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow create and update only if:
+      // 1. User is authenticated and matches userId
+      // 2. File size is <= 10MB
+      // 3. File MIME type is strictly PDF
+      allow create, update: if request.auth != null 
+                            && request.auth.uid == userId
+                            && request.resource.size <= 10 * 1024 * 1024
+                            && (request.resource.contentType == 'application/pdf' || 
+                                request.resource.contentType == 'application/x-pdf');
+    }
+
+    // Default deny for all other storage paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

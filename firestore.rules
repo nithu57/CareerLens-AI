@@ -1,0 +1,439 @@
+rules_version = '2';
+
+// ===============================================================
+// Cloud Firestore Security Rules for CareerLens AI
+// Project ID: careerLens-ai-8beae
+// ===============================================================
+//
+// Assumed Data Model:
+//
+// 1. Collection: users
+//    Document ID: {uid} (Matches Firebase Auth UID)
+//    Fields:
+//      - uid: string (required, immutable) - Firebase Auth user UID
+//      - email: string (required) - User email address
+//      - displayName: string (required) - Full or display name
+//      - onboardingCompleted: bool (required) - Onboarding status flag
+//      - photoURL: string | null (optional) - Avatar URL
+//      - education: string (optional) - Education institution / degree
+//      - experienceLevel: string (optional) - Professional experience level
+//      - technicalSkills: list (optional) - Verified or selected skill strings
+//      - targetRole: string (optional) - Target career role
+//      - preferredLocation: string (optional) - Preferred work location
+//      - workArrangement: string (optional) - Remote / Hybrid / On-site / Flexible
+//      - weeklyHours: number (optional) - Weekly hours available for study
+//      - careerGoals: string (optional) - Long-term career objectives
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 2. Subcollection: users/{uid}/resume_analyses
+//    Document ID: {analysisId}
+//    Fields:
+//      - id: string (optional) - Analysis record ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - fileName: string (required) - Uploaded resume filename
+//      - fileUrl: string (optional) - Cloud Storage download URL
+//      - extractedText: string (optional) - Extracted resume plain text
+//      - targetRole: string (required) - Role targeted for analysis
+//      - readinessScore: number (required) - Computed score (0-100)
+//      - extractedData: map (optional) - Structured parsed resume data
+//      - skillBreakdown: map (optional) - Category skill match breakdown
+//      - improvements: list (optional) - Actionable recommendations
+//      - isUserVerified: bool (required) - Manual verification flag
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 3. Subcollection: users/{uid}/job_analyses
+//    Document ID: {analysisId}
+//    Fields:
+//      - id: string (optional) - Analysis record ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - jobTitle: string (required) - Target job title
+//      - company: string (required) - Company name
+//      - jobDescription: string (optional) - Job description text
+//      - matchScore: number (required) - Calculated match score (0-100)
+//      - matchedSkills: list (optional) - Matching competencies
+//      - missingSkills: list (optional) - Missing required skills
+//      - recommendations: list (optional) - Personalized guidance
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 4. Subcollection: users/{uid}/saved_jobs
+//    Document ID: {jobId}
+//    Fields:
+//      - id: string (optional) - Job record ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - job: map (required) - Complete JobListing snapshot
+//      - matchScore: number (optional) - Fit score (0-100)
+//      - savedAt: string | timestamp (optional, immutable)
+//      - status: string (required) - 'Saved' | 'Applied' | 'Interviewing' | 'Offer' | 'Archived'
+//      - notes: string (optional) - Personal notes
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 5. Subcollection: users/{uid}/saved_resources
+//    Document ID: {resourceId}
+//    Fields:
+//      - id: string (optional) - Resource record ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - resource: map (required) - LearningResourceItem snapshot
+//      - savedAt: string | timestamp (optional, immutable)
+//      - completed: bool (required) - Completion state
+//      - completedAt: string | timestamp (optional)
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 6. Subcollection: users/{uid}/roadmap
+//    Document ID: {milestoneId}
+//    Fields:
+//      - id: string (optional) - Milestone record ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - weekNumber: number (required) - Sequence week number (1-104)
+//      - title: string (required) - Milestone module title
+//      - estimatedHours: number (optional) - Estimated hours (0-168)
+//      - objectives: list (optional) - Goal items
+//      - actionItems: list (optional) - Actionable steps
+//      - practicalExercises: list (optional) - Practice exercises
+//      - portfolioProject: map (optional) - Portfolio project spec
+//      - verifiedResources: list (optional) - Resource references
+//      - completed: bool (required) - Milestone completion flag
+//      - completedAt: string | timestamp (optional)
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 7. Subcollection: users/{uid}/chat_history
+//    Document ID: {messageId}
+//    Fields:
+//      - id: string (optional) - Message ID
+//      - userId: string (required, immutable) - Owning user UID
+//      - role: string (required) - 'user' | 'assistant' | 'system'
+//      - content: string (required) - Message text content
+//      - citations: list (optional) - Source citations
+//      - suggestedFollowUps: list (optional) - Follow-up prompt options
+//      - createdAt: string | timestamp (optional, immutable)
+//      - updatedAt: string | timestamp (optional)
+//
+// 8. Shared Read-Only Reference Collections:
+//    - job_market_snapshots/{snapshotId}
+//    - skill_demand_snapshots/{snapshotId}
+//    - resource_catalog/{resourceId}
+//    - system_status/{providerId}
+//    Writable strictly by Cloud Functions Admin SDK; client writes denied.
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the request is from an authenticated user
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user is the designated owner
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Validate email format and character length
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() <= 255 &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+[.][a-zA-Z]{2,}$');
+    }
+
+    // Validate optional date fields (accepts ISO 8601 string, null, or native timestamp)
+    function isValidOptionalDate(field, data) {
+      return !(field in data) ||
+        data[field] == null ||
+        data[field] is timestamp ||
+        (data[field] is string && data[field].size() <= 50);
+    }
+
+    // Verify immutability of core profile fields
+    function isUserImmutableUnchanged() {
+      return request.resource.data.uid == resource.data.uid &&
+        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
+    }
+
+    // Verify immutability of subcollection ownership and timestamps
+    function isSubcollectionImmutableUnchanged() {
+      return request.resource.data.userId == resource.data.userId &&
+        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+        (!('savedAt' in resource.data) || request.resource.data.savedAt == resource.data.savedAt);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    // Validator for users/{uid} documents
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'onboardingCompleted']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoURL', 'education',
+          'experienceLevel', 'technicalSkills', 'targetRole', 'preferredLocation',
+          'workArrangement', 'weeklyHours', 'careerGoals', 'onboardingCompleted',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.uid is string &&
+        data.uid == uid &&
+        data.uid == request.auth.uid &&
+        data.uid.size() > 0 && data.uid.size() <= 128 &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 && data.displayName.size() <= 150 &&
+        data.email is string &&
+        isValidEmail(data.email) &&
+        data.onboardingCompleted is bool &&
+        (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 1000)) &&
+        (!('education' in data) || (data.education is string && data.education.size() <= 200)) &&
+        (!('experienceLevel' in data) || (data.experienceLevel is string && data.experienceLevel.size() <= 50)) &&
+        (!('technicalSkills' in data) || (data.technicalSkills is list && data.technicalSkills.size() <= 100)) &&
+        (!('targetRole' in data) || (data.targetRole is string && data.targetRole.size() <= 100)) &&
+        (!('preferredLocation' in data) || (data.preferredLocation is string && data.preferredLocation.size() <= 100)) &&
+        (!('workArrangement' in data) || (data.workArrangement is string && data.workArrangement.size() <= 50)) &&
+        (!('weeklyHours' in data) || (data.weeklyHours is number && data.weeklyHours >= 0 && data.weeklyHours <= 168)) &&
+        (!('careerGoals' in data) || (data.careerGoals is string && data.careerGoals.size() <= 2000)) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/resume_analyses/{analysisId} documents
+    function isValidResumeAnalysis(data, uid) {
+      return data.keys().hasAll(['userId', 'fileName', 'targetRole', 'readinessScore', 'isUserVerified']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'fileName', 'fileUrl', 'extractedText', 'targetRole',
+          'readinessScore', 'extractedData', 'skillBreakdown', 'improvements',
+          'isUserVerified', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.fileName is string &&
+        data.fileName.size() >= 1 && data.fileName.size() <= 255 &&
+        data.targetRole is string &&
+        data.targetRole.size() >= 1 && data.targetRole.size() <= 100 &&
+        data.readinessScore is number &&
+        data.readinessScore >= 0 && data.readinessScore <= 100 &&
+        data.isUserVerified is bool &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('fileUrl' in data) || (data.fileUrl is string && data.fileUrl.size() <= 1000)) &&
+        (!('extractedText' in data) || (data.extractedText is string && data.extractedText.size() <= 100000)) &&
+        (!('extractedData' in data) || (data.extractedData is map && data.extractedData.size() <= 30)) &&
+        (!('skillBreakdown' in data) || (data.skillBreakdown is map && data.skillBreakdown.size() <= 10)) &&
+        (!('improvements' in data) || (data.improvements is list && data.improvements.size() <= 50)) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/job_analyses/{analysisId} documents
+    function isValidJobAnalysis(data, uid) {
+      return data.keys().hasAll(['userId', 'jobTitle', 'company', 'matchScore']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'jobTitle', 'company', 'jobDescription', 'matchScore',
+          'matchedSkills', 'missingSkills', 'recommendations', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.jobTitle is string &&
+        data.jobTitle.size() >= 1 && data.jobTitle.size() <= 200 &&
+        data.company is string &&
+        data.company.size() >= 1 && data.company.size() <= 200 &&
+        data.matchScore is number &&
+        data.matchScore >= 0 && data.matchScore <= 100 &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('jobDescription' in data) || (data.jobDescription is string && data.jobDescription.size() <= 50000)) &&
+        (!('matchedSkills' in data) || (data.matchedSkills is list && data.matchedSkills.size() <= 100)) &&
+        (!('missingSkills' in data) || (data.missingSkills is list && data.missingSkills.size() <= 100)) &&
+        (!('recommendations' in data) || (data.recommendations is list && data.recommendations.size() <= 50)) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/saved_jobs/{jobId} documents
+    function isValidSavedJob(data, uid) {
+      return data.keys().hasAll(['userId', 'job', 'status']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'job', 'matchScore', 'savedAt', 'status', 'notes',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.job is map &&
+        data.job.size() <= 30 &&
+        data.status is string &&
+        data.status in ['Saved', 'Applied', 'Interviewing', 'Offer', 'Archived'] &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('matchScore' in data) || (data.matchScore is number && data.matchScore >= 0 && data.matchScore <= 100)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 5000)) &&
+        isValidOptionalDate('savedAt', data) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/saved_resources/{resourceId} documents
+    function isValidSavedResource(data, uid) {
+      return data.keys().hasAll(['userId', 'resource', 'completed']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'resource', 'savedAt', 'completed', 'completedAt',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.resource is map &&
+        data.resource.size() <= 20 &&
+        data.completed is bool &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        isValidOptionalDate('savedAt', data) &&
+        isValidOptionalDate('completedAt', data) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/roadmap/{milestoneId} documents
+    function isValidRoadmapMilestone(data, uid) {
+      return data.keys().hasAll(['userId', 'weekNumber', 'title', 'completed']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'weekNumber', 'title', 'estimatedHours', 'objectives',
+          'actionItems', 'practicalExercises', 'portfolioProject', 'verifiedResources',
+          'completed', 'completedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.weekNumber is number &&
+        data.weekNumber >= 1 && data.weekNumber <= 104 &&
+        data.title is string &&
+        data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.completed is bool &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('estimatedHours' in data) || (data.estimatedHours is number && data.estimatedHours >= 0 && data.estimatedHours <= 168)) &&
+        (!('objectives' in data) || (data.objectives is list && data.objectives.size() <= 50)) &&
+        (!('actionItems' in data) || (data.actionItems is list && data.actionItems.size() <= 50)) &&
+        (!('practicalExercises' in data) || (data.practicalExercises is list && data.practicalExercises.size() <= 50)) &&
+        (!('portfolioProject' in data) || (data.portfolioProject is map && data.portfolioProject.size() <= 10)) &&
+        (!('verifiedResources' in data) || (data.verifiedResources is list && data.verifiedResources.size() <= 50)) &&
+        isValidOptionalDate('completedAt', data) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // Validator for users/{uid}/chat_history/{messageId} documents
+    function isValidChatMessage(data, uid) {
+      return data.keys().hasAll(['userId', 'role', 'content']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'role', 'content', 'citations', 'suggestedFollowUps',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string &&
+        data.userId == uid &&
+        data.userId == request.auth.uid &&
+        data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.role is string &&
+        data.role in ['user', 'assistant', 'system'] &&
+        data.content is string &&
+        data.content.size() >= 1 && data.content.size() <= 20000 &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('citations' in data) || (data.citations is list && data.citations.size() <= 20)) &&
+        (!('suggestedFollowUps' in data) || (data.suggestedFollowUps is list && data.suggestedFollowUps.size() <= 10)) &&
+        isValidOptionalDate('createdAt', data) &&
+        isValidOptionalDate('updatedAt', data);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. User Profiles & User-Scoped Subcollections
+    match /users/{uid} {
+      // Profile is strictly private to the authenticated owner (protects PII)
+      allow read, delete: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidUserProfile(request.resource.data, uid);
+      allow update: if isOwner(uid) && isValidUserProfile(request.resource.data, uid) && isUserImmutableUnchanged();
+
+      // Subcollection: Resume Analyses
+      match /resume_analyses/{analysisId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidResumeAnalysis(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidResumeAnalysis(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+
+      // Subcollection: Job Compatibility Analyses
+      match /job_analyses/{analysisId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidJobAnalysis(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidJobAnalysis(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+
+      // Subcollection: Saved Jobs
+      match /saved_jobs/{jobId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidSavedJob(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidSavedJob(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+
+      // Subcollection: Saved Learning Resources
+      match /saved_resources/{resourceId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidSavedResource(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidSavedResource(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+
+      // Subcollection: Skill Progression Roadmap Milestones
+      match /roadmap/{milestoneId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidRoadmapMilestone(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidRoadmapMilestone(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+
+      // Subcollection: AI Career Advisor Chat History
+      match /chat_history/{messageId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidChatMessage(request.resource.data, uid);
+        allow update: if isOwner(uid) && isValidChatMessage(request.resource.data, uid) && isSubcollectionImmutableUnchanged();
+      }
+    }
+
+    // 2. Shared Read-Only Reference Collections
+    // Readable by any authenticated user; writes restricted to Admin SDK in Cloud Functions
+
+    match /job_market_snapshots/{snapshotId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /skill_demand_snapshots/{snapshotId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /resource_catalog/{resourceId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /system_status/{providerId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // ===============================================================
+    // Default Deny Rule for Any Unmatched Documents
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
