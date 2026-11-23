@@ -43,6 +43,10 @@ export const LoginPage: React.FC = () => {
         setAuthError('Invalid email or password. Please verify your credentials.');
       } else if (err.code === 'auth/too-many-requests') {
         setAuthError('Too many failed attempts. Please reset your password or try again later.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setAuthError(
+          'Network request blocked by browser. An ad-blocker (uBlock, AdBlock, Brave Shields) or privacy extension is blocking Google Firebase Auth (identitytoolkit.googleapis.com). Please disable extensions for localhost:3000 or open in an Incognito / Private window.'
+        );
       } else if (
         err.code === 'auth/api-key-not-valid-please-pass-a-valid-api-key' ||
         err.code === 'auth/invalid-api-key'

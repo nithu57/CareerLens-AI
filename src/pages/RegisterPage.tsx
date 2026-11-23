@@ -47,6 +47,10 @@ export const RegisterPage: React.FC = () => {
         setAuthError('An account with this email already exists. Please sign in instead.');
       } else if (err.code === 'auth/weak-password') {
         setAuthError('Password is too weak. Please use a stronger combination.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setAuthError(
+          'Network request blocked by browser. An ad-blocker (uBlock, AdBlock, Brave Shields) or privacy extension is blocking Google Firebase Auth (identitytoolkit.googleapis.com). Please disable extensions for localhost:3000 or open in an Incognito / Private window.'
+        );
       } else if (err.code === 'firestore/database-unavailable') {
         setAuthError(err.message);
       } else if (err.code === 'firestore/permission-denied') {

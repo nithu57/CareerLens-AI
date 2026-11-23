@@ -76,17 +76,27 @@ export const requireAuth = async (req, res, next) => {
     if (!user) {
       // Auto-create user document in MongoDB upon first authenticated request
       const fallbackName = decodedName || (decodedEmail ? decodedEmail.split('@')[0] : 'User');
-      user = await User.create({
-        firebaseUid: decodedUid,
-        uid: decodedUid,
-        email: decodedEmail || `${decodedUid}@careerlens.local`,
-        name: fallbackName,
-        displayName: fallbackName,
-        profileImage: decodedPicture,
-        photoURL: decodedPicture,
-        onboardingCompleted: false,
-      });
-      console.log(`[AuthMiddleware] Created new MongoDB user for firebaseUid: ${decodedUid}`);
+      try {
+        user = await User.create({
+          firebaseUid: decodedUid,
+          uid: decodedUid,
+          email: decodedEmail || `${decodedUid}@careerlens.local`,
+          name: fallbackName,
+          displayName: fallbackName,
+          profileImage: decodedPicture,
+          photoURL: decodedPicture,
+          onboardingCompleted: false,
+        });
+        console.log(`[AuthMiddleware] Created new MongoDB user for firebaseUid: ${decodedUid}`);
+      } catch (createErr) {
+        if (createErr.code === 11000) {
+          user = await User.findOne({
+            $or: [{ firebaseUid: decodedUid }, { uid: decodedUid }],
+          });
+        } else {
+          throw createErr;
+        }
+      }
     }
 
     req.user = user;
