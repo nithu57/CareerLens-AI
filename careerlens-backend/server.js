@@ -22,7 +22,11 @@ const PORT = process.env.PORT || 5001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // 1. Security & Core Middleware
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
 // Dynamic CORS configuration for React Web, Flutter Web & Mobile
 const allowedOrigins = (process.env.WEB_ORIGIN || 'http://localhost:3000,http://localhost:5173')
